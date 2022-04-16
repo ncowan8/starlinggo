@@ -1,3 +1,3 @@
-module github.com/ncowan8/starlingGo
+module github.com/ncowan8/starlinggo
 
 go 1.18
