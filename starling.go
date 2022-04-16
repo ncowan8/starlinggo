@@ -1,4 +1,4 @@
-package starlingGo
+package starlinggo
 
 import (
 	"encoding/json"
