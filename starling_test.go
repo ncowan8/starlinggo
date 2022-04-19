@@ -35,7 +35,7 @@ func init() {
 // manually creation an account for use in tests
 var testAccount = Account{Token: testToken, AccountUid: testAccountUid, CategoryUid: testCategoryUid}
 
-func TestWriteRepTab(t *testing.T) {
+func Test_writeRepTab(t *testing.T) {
 	// token test function
 	s := "s"
 	p := "p"
@@ -51,10 +51,9 @@ func TestWriteRepTab(t *testing.T) {
 
 }
 
-func TestAccountInit(t *testing.T) {
+func Test_AccountInit(t *testing.T) {
 
-	json := `
-{
+	json := `{
 	"accounts": [
 	  {
 		"accountUid": "correct",
@@ -76,7 +75,6 @@ func TestAccountInit(t *testing.T) {
 }`
 
 	// create a new reader with that JSON
-
 	GetDoFunc = func(*http.Request) (*http.Response, error) {
 		r := ioutil.NopCloser(bytes.NewReader([]byte(json)))
 		return &http.Response{
@@ -98,4 +96,28 @@ func TestAccountInit(t *testing.T) {
 		t.Fatalf(`result = %q want match for %#q`, testAccount.CategoryUid, "correct")
 	}
 
+}
+
+func Test_get(t *testing.T) {
+
+	// build response JSON
+	json := `{"name":"Test Name","full_name":"test full name","owner":{"login": "octocat"}}`
+	// create a new reader with that JSON
+	r := ioutil.NopCloser(bytes.NewReader([]byte(json)))
+
+	GetDoFunc = func(h *http.Request) (*http.Response, error) {
+
+		if h.Header.Get("Authorization") != "Bearer "+testToken {
+			t.Fatalf(`result = %q want match for %#q`, h.Header.Get("Authorization"), "Bearer "+testToken)
+		}
+
+		return &http.Response{
+			StatusCode: 200,
+			Body:       r,
+		}, nil
+	}
+
+	if result := get("anything", testToken); string(result) != json {
+		t.Fatal("Uh oh stinky")
+	}
 }
