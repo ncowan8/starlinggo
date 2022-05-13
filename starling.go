@@ -72,30 +72,59 @@ type transactions struct {
 	Transactions []transaction `json:"feedItems"`
 }
 
-type Accounter interface {
-	getDirectDebits()
-	getRecurringPayments()
-	getStandingOrders()
-	getBalance()
-	getTransactionsSince()
-	leftToPayReport()
-	getLastPayDay()
+type accounts struct {
+	Accounts []accountDetial `json:"accounts"`
 }
+
+type accountDetial struct {
+	AccountUid  string `json:"accountUid"`
+	AccountType string `json:"accountType"`
+	CategoryUid string `json:"defaultCategory"`
+	Name        string `json:"name"`
+}
+
+// type Accounter interface {
+// 	getDirectDebits()
+// 	getRecurringPayments()
+// 	getStandingOrders()
+// 	GetBalance()
+// 	getTransactionsSince()
+// 	leftToPayReport()
+// 	getLastPayDay()
+// }
 
 type Account struct {
-	Token       string
-	AccountUid  string
-	CategoryUid string
+	Token, AccountUid, CategoryUid string
 }
 
-func (x Account) get(endpoint string) []byte {
+// HTTPClient interface
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
 
-	client := &http.Client{}
+var Client HTTPClient
+
+func init() {
+	Client = &http.Client{}
+}
+
+// Initialise and return an account
+func AccountInit(token string) Account {
+
+	au, cu := getPrimaryAccountDetails(token)
+	acc := Account{Token: token, AccountUid: au, CategoryUid: cu}
+	return acc
+
+}
+
+// Generic get function that makes the request to starling api
+func get(endpoint string, token string) []byte {
+
 	req, _ := http.NewRequest("GET", BaseUrl+endpoint, nil)
 
-	req.Header.Set("Authorization", "Bearer "+x.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := client.Do(req)
+	resp, err := Client.Do(req)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -110,9 +139,29 @@ func (x Account) get(endpoint string) []byte {
 	return body
 }
 
+// Function to gather additional account info for intialisation
+func getPrimaryAccountDetails(token string) (string, string) {
+
+	resp := get("accounts", token)
+	var accs accounts
+	fmt.Println(string(resp))
+	if err := json.Unmarshal(resp, &accs); err != nil {
+		log.Fatal(err.Error())
+	}
+
+	var accUid, catUid string
+	for _, acc := range accs.Accounts {
+		if acc.AccountType == "PRIMARY" {
+			accUid, catUid = acc.AccountUid, acc.CategoryUid
+		}
+	}
+	return accUid, catUid
+}
+
+// Function to collect a list of all active direct debits for the account
 func (x Account) getDirectDebits() []directDebit {
 
-	resp := x.get("direct-debit/mandates")
+	resp := get("direct-debit/mandates", x.Token)
 	var dds directDebits
 	if err := json.Unmarshal(resp, &dds); err != nil {
 		log.Fatal(err)
@@ -121,7 +170,7 @@ func (x Account) getDirectDebits() []directDebit {
 }
 
 func (x Account) getRecurringPayments() []recurringPayment {
-	resp := x.get(fmt.Sprintf("accounts/%s/recurring-payment", x.AccountUid))
+	resp := get(fmt.Sprintf("accounts/%s/recurring-payment", x.AccountUid), x.Token)
 	var rps recurringPayments
 	if err := json.Unmarshal(resp, &rps); err != nil {
 		log.Fatal(err)
@@ -130,7 +179,7 @@ func (x Account) getRecurringPayments() []recurringPayment {
 }
 
 func (x Account) getStandingOrders() []standingOrder {
-	resp := x.get(fmt.Sprintf("payments/local/account/%s/category/%s/standing-orders", x.AccountUid, x.CategoryUid))
+	resp := get(fmt.Sprintf("payments/local/account/%s/category/%s/standing-orders", x.AccountUid, x.CategoryUid), x.Token)
 	var sos standingOrders
 	if err := json.Unmarshal(resp, &sos); err != nil {
 		log.Fatal(err)
@@ -138,9 +187,10 @@ func (x Account) getStandingOrders() []standingOrder {
 	return sos.StandingOrders
 }
 
-func (x Account) getBalance() float64 {
+// Function to return the effective balance of the account in pounds
+func (x Account) GetBalance() float64 {
 
-	resp := x.get(fmt.Sprintf("accounts/%s/balance", x.AccountUid))
+	resp := get(fmt.Sprintf("accounts/%s/balance", x.AccountUid), x.Token)
 	var bal balances
 	if err := json.Unmarshal(resp, &bal); err != nil {
 		log.Fatal(err)
@@ -151,7 +201,7 @@ func (x Account) getBalance() float64 {
 
 func (x Account) getTransactionsSince(since time.Time) transactions {
 
-	resp := x.get(fmt.Sprintf("feed/account/%s/category/%s?changesSince=%s", x.AccountUid, x.CategoryUid, since.Format(datetimeFmt)))
+	resp := get(fmt.Sprintf("feed/account/%s/category/%s?changesSince=%s", x.AccountUid, x.CategoryUid, since.Format(datetimeFmt)), x.Token)
 	var t transactions
 	if err := json.Unmarshal(resp, &t); err != nil {
 		log.Fatal(err)
@@ -159,10 +209,10 @@ func (x Account) getTransactionsSince(since time.Time) transactions {
 	return t
 }
 
-func getLastPayDay(ts []transaction, ref string, employer string) time.Time {
+func getLastPayDay(ts []transaction, ref string) time.Time {
 	var dt time.Time
 	for _, t := range ts {
-		if t.Direction == "IN" && t.Reference == ref && t.PartyName == employer {
+		if t.Direction == "IN" && t.Reference == ref {
 			dt, _ = time.Parse(datetimeFmt, t.TransactionDt)
 		}
 	}
@@ -180,7 +230,7 @@ func leftToPayReport(dd []directDebit, rp []recurringPayment, so []standingOrder
 	for _, e := range dd {
 		dt, _ := time.Parse(dateFmt, e.LatestPayment.LastDate)
 		if e.Status == "LIVE" && dt.Before(payDate) {
-			report += writeRepTab(e.Status, e.Payee, e.LatestPayment.LastAmount.Pence/100.00, dt.Format(dateFmt))
+			report += writeRepTab("ACTIVE", e.Payee, e.LatestPayment.LastAmount.Pence/100.00, dt.Format(dateFmt))
 			total += e.LatestPayment.LastAmount.Pence
 		}
 	}
@@ -207,19 +257,18 @@ func leftToPayReport(dd []directDebit, rp []recurringPayment, so []standingOrder
 
 }
 
-func (x Account) Report(payRef string, employer string) string {
+func (x Account) Report(payRef string) string {
 
 	now := time.Now()
-
 	since := now.AddDate(0, -1, 0)
 	trans := x.getTransactionsSince(since).Transactions
-	payDay := getLastPayDay(trans, payRef, employer)
-	dd, so, rp, bal := x.getDirectDebits(), x.getStandingOrders(), x.getRecurringPayments(), x.getBalance()
+	payDay := getLastPayDay(trans, payRef)
+	dd, so, rp, bal := x.getDirectDebits(), x.getStandingOrders(), x.getRecurringPayments(), x.GetBalance()
 	toPay, toPayRep := leftToPayReport(dd, rp, so, payDay)
 	report := fmt.Sprintf("<head><style>table, th, td {border: 1px solid black;}</style></head><body><table>%s</table>", toPayRep)
 	// add invisable uncode char to force utf-8 as gmail is dumb
 	report += fmt.Sprintf("<p>\u200BLast pay day %s</p>", payDay.Format(dateFmt))
-	report += fmt.Sprintf("<p><strong>Balance £%6.2f - To Pay £%6.2f - Remaining balance £%6.2f</strong></p></body>", bal, toPay, bal-toPay)
+	report += fmt.Sprintf("<p>Balance £%6.2f<br>To Pay £%6.2f<br>Effective balance £%6.2f</p></body>", bal, toPay, bal-toPay)
 	return report
 
 }
